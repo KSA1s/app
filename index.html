@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Available Discord Usernames</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; background: #2c2f33; color: #fff; }
+  h1 { color: #7289da; }
+  ul { list-style: none; padding: 0; }
+  li { background: #23272a; margin: 5px 0; padding: 10px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<h1>Available Discord Usernames</h1>
+<ul id="usernames-list">Loading...</ul>
+
+<script>
+async function loadUsernames() {
+    const ul = document.getElementById('usernames-list');
+    ul.innerHTML = 'Loading...';
+    try {
+        const res = await fetch('/available_usernames');
+        if (!res.ok) throw new Error('Failed to fetch');
+        const data = await res.json();
+        if(data.length === 0) {
+            ul.innerHTML = '<li>No available usernames found yet.</li>';
+            return;
+        }
+        ul.innerHTML = '';
+        data.forEach(name => {
+            const li = document.createElement('li');
+            li.textContent = name;
+            ul.appendChild(li);
+        });
+    } catch (e) {
+        ul.innerHTML = '<li>Error loading usernames.</li>';
+        console.error(e);
+    }
+}
+
+// Refresh list every 10 seconds
+loadUsernames();
+setInterval(loadUsernames, 10000);
+</script>
+</body>
+</html>
