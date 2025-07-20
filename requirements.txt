@@ -1,4 +1,2 @@
 Flask
 requests
-gunicorn  # optional, if you want to use it
-colorama  # if your script uses it
