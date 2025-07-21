@@ -1,77 +1,73 @@
-import time
-import json
-import requests
-from flask import Flask, jsonify, send_from_directory
-import threading
 import os
+import time
+import requests
+import threading
 import concurrent.futures
-
+from flask import Flask, jsonify
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 app = Flask(__name__)
-dir_path = os.path.dirname(os.path.realpath(__file__))
-usernames_file = os.path.join(dir_path, 'usernames.txt')
 
-CHECK_URL = "https://discord.com/api/v9/users/@me/pomelo-attempt"
-
-# Read environment variables
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RENDER_DEPLOY_HOOK_URL = os.getenv("RENDER_DEPLOY_HOOK_URL")
 
+CHECK_URL = "https://discord.com/api/v9/users/@me/pomelo-attempt"
 HEADERS = {
     "Content-Type": "application/json",
     "Origin": "https://discord.com",
-    "Authorization": DISCORD_TOKEN
+    "Authorization": DISCORD_TOKEN,
 }
 
-MAX_WORKERS = 10  # Concurrency level
+MAX_WORKERS = 10
 available_usernames = []
+usernames_file = "usernames.txt"
 
-# --- Telegram notifier ---
+
 def send_telegram(msg: str):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[!] Telegram not configured.")
+        print("[!] Telegram not configured properly.")
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
         r = requests.post(url, data=payload)
         if r.status_code != 200:
-            print(f"[!] Telegram failed: {r.text}")
+            print(f"[!] Telegram send failed: {r.text}")
     except Exception as e:
-        print(f"[!] Telegram exception: {e}")
+        print(f"[!] Telegram error: {e}")
 
-# --- Check username ---
+
 def check_username(username):
     data = {"username": username}
     try:
         resp = requests.post(CHECK_URL, headers=HEADERS, json=data)
         if resp.status_code == 200:
-            return not resp.json().get("taken", True)
+            result = resp.json()
+            return not result.get("taken", True)
         elif resp.status_code == 429:
             retry_after = resp.json().get("retry_after", 5)
-            print(f"[!] Rate limit: sleeping {retry_after}s...")
+            print(f"Rate limited, sleeping {retry_after}s...")
             time.sleep(retry_after)
             return check_username(username)
         else:
-            print(f"[!] Error: {resp.status_code} for {username}")
+            print(f"Error checking {username}: {resp.text}")
             return False
     except Exception as e:
-        print(f"[!] Exception checking {username}: {e}")
+        print(f"Exception checking {username}: {e}")
         return False
 
-# --- Load usernames ---
+
 def load_usernames():
     if not os.path.exists(usernames_file):
-        print(f"[!] '{usernames_file}' not found.")
+        print(f"[!] {usernames_file} not found.")
         return []
-    with open(usernames_file, 'r') as f:
+    with open(usernames_file, "r") as f:
         return [line.strip() for line in f if line.strip()]
 
-# --- Task for pool ---
+
 def username_check_task(username):
     if check_username(username):
         print(f"[+] Available: {username}")
@@ -81,7 +77,7 @@ def username_check_task(username):
         print(f"[-] Taken: {username}")
         return None
 
-# --- Background checker ---
+
 def username_checker_loop():
     global available_usernames
     send_telegram("🚀 Username checker started!")
@@ -89,77 +85,78 @@ def username_checker_loop():
 
     usernames = load_usernames()
     if not usernames:
-        send_telegram("⚠️ No usernames found.")
+        send_telegram("⚠️ No usernames to check.")
         return
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(username_check_task, u) for u in usernames]
+        futures = {executor.submit(username_check_task, u): u for u in usernames}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             if result:
                 available_usernames.append(result)
 
-    report = "📋 Check complete.\n"
-    if available_usernames:
-        report += "Available:\n" + "\n".join(available_usernames)
-    else:
-        report += "No usernames available."
+    report = (
+        "📋 Username check completed.\n"
+        + ("Available usernames:\n" + "\n".join(available_usernames) if available_usernames else "No available usernames found.")
+    )
     send_telegram(report)
-    send_telegram("🛑 Checker stopped.")
+    send_telegram("🛑 Username checker stopped.")
 
-# --- Start thread ---
+
 def start_check_thread():
     thread = threading.Thread(target=username_checker_loop)
     thread.daemon = True
     thread.start()
 
-# --- Telegram commands ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Bot is running. Use /redeploy to restart the Render service.")
+    user = update.effective_user
+    msg = f"Hi, {user.first_name}! This bot is working."
+    await update.message.reply_text(msg)
+    send_telegram(f"User {user.username or user.id} started the bot.")
+
 
 async def redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     if chat_id != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("❌ Unauthorized.")
+        await update.message.reply_text("🚫 You are not authorized to run this command.")
         return
     if not RENDER_DEPLOY_HOOK_URL:
-        await update.message.reply_text("⚠️ No deploy hook URL.")
+        await update.message.reply_text("⚠️ Deploy hook URL not configured.")
         return
     try:
-        r = requests.post(RENDER_DEPLOY_HOOK_URL)
-        if r.status_code == 200:
-            await update.message.reply_text("✅ Deploy triggered.")
+        resp = requests.post(RENDER_DEPLOY_HOOK_URL)
+        if resp.status_code == 200:
+            await update.message.reply_text("✅ Deploy triggered successfully!")
         else:
-            await update.message.reply_text(f"❌ Failed: {r.status_code}")
+            await update.message.reply_text(f"❌ Deploy failed with status {resp.status_code}")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {e}")
+        await update.message.reply_text(f"⚠️ Error triggering deploy: {e}")
+
 
 def run_telegram_bot():
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[!] Telegram not configured. Skipping bot.")
+        print("[!] Telegram environment variables missing, skipping bot start.")
         return
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("redeploy", redeploy))
     threading.Thread(target=application.run_polling, daemon=True).start()
 
-# --- Flask Routes ---
-@app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
 
-@app.route('/available_usernames')
-def get_available_usernames():
+@app.route("/available_usernames")
+def available_usernames_route():
+    global available_usernames
     return jsonify(available_usernames)
 
-# --- Main ---
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("❌ DISCORD_TOKEN not set.")
+        print("[!] DISCORD_TOKEN environment variable required!")
         exit(1)
 
     run_telegram_bot()
     start_check_thread()
 
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
