@@ -5,6 +5,9 @@ from flask import Flask, jsonify, send_from_directory
 import threading
 import os
 
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
 app = Flask(__name__)
 dir_path = os.path.dirname(os.path.realpath(__file__))
 usernames_file = os.path.join(dir_path, 'usernames.txt')
@@ -16,6 +19,7 @@ CHECK_URL = "https://discord.com/api/v9/users/@me/pomelo-attempt"
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+RENDER_DEPLOY_HOOK_URL = os.getenv("RENDER_DEPLOY_HOOK_URL")
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -94,21 +98,30 @@ def start_check_thread():
     thread.daemon = True
     thread.start()
 
-# --- Flask Routes ---
-@app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
+# --- Telegram bot handlers ---
 
-@app.route('/available_usernames')
-def get_available_usernames():
-    global available_usernames
-    return jsonify(available_usernames)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hi! Use /redeploy to trigger a Render deploy.")
 
-# --- Main Entry ---
-if __name__ == '__main__':
-    if not DISCORD_TOKEN:
-        print("❌ ERROR: Please set your DISCORD_TOKEN environment variable.")
-        exit(1)
-    start_check_thread()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+async def redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != TELEGRAM_CHAT_ID:
+        await update.message.reply_text("🚫 You are not authorized to run this command.")
+        return
+    if not RENDER_DEPLOY_HOOK_URL:
+        await update.message.reply_text("⚠️ Deploy hook URL not configured.")
+        return
+    try:
+        resp = requests.post(RENDER_DEPLOY_HOOK_URL)
+        if resp.status_code == 200:
+            await update.message.reply_text("✅ Deploy triggered successfully!")
+        else:
+            await update.message.reply_text(f"❌ Deploy failed with status {resp.status_code}")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error triggering deploy: {e}")
+
+def run_telegram_bot():
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[!] Telegram bot environment variables missing, skipping bot startup.")
+        return
+    app = ApplicationB
