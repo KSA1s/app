@@ -80,8 +80,16 @@ def save_available(username):
 # --- Background checker thread ---
 def username_checker_loop():
     global available_usernames
+
+    # Notify on Telegram if deploy hook URL exists (just once)
+    if RENDER_DEPLOY_HOOK_URL:
+        send_telegram(f"🔔 Deploy Hook URL detected: {RENDER_DEPLOY_HOOK_URL}")
+    else:
+        print("[!] No Deploy Hook URL set, skipping deploy notification.")
+
     usernames = load_usernames()
     available_usernames = []
+
     for username in usernames:
         if check_username(username):
             print(f"[+] Available: {username}")
@@ -99,7 +107,6 @@ def start_check_thread():
     thread.start()
 
 # --- Telegram bot handlers ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hi! Use /redeploy to trigger a Render deploy.")
 
@@ -124,4 +131,32 @@ def run_telegram_bot():
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("[!] Telegram bot environment variables missing, skipping bot startup.")
         return
-    app = ApplicationB
+
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("redeploy", redeploy))
+
+    # Run the bot asynchronously in a separate thread
+    threading.Thread(target=application.run_polling, daemon=True).start()
+
+# --- Flask Routes ---
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
+
+@app.route('/available_usernames')
+def get_available_usernames():
+    global available_usernames
+    return jsonify(available_usernames)
+
+# --- Main Entry ---
+if __name__ == '__main__':
+    if not DISCORD_TOKEN:
+        print("❌ ERROR: Please set your DISCORD_TOKEN environment variable.")
+        exit(1)
+
+    run_telegram_bot()
+    start_check_thread()
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
