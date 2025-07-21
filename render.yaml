@@ -6,4 +6,10 @@ services:
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 4
     envVars:
       - key: DISCORD_TOKEN
-        sync: false  # Set manually in the dashboard
+        sync: false  # Set this manually in Render dashboard
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: RENDER_DEPLOY_HOOK_URL
+        sync: false
