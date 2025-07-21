@@ -4,6 +4,7 @@ import requests
 from flask import Flask, jsonify, send_from_directory
 import threading
 import os
+import concurrent.futures
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -11,7 +12,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 app = Flask(__name__)
 dir_path = os.path.dirname(os.path.realpath(__file__))
 usernames_file = os.path.join(dir_path, 'usernames.txt')
-available_file = os.path.join(dir_path, 'available_usernames.txt')
 
 CHECK_URL = "https://discord.com/api/v9/users/@me/pomelo-attempt"
 
@@ -27,7 +27,7 @@ HEADERS = {
     "Authorization": DISCORD_TOKEN
 }
 
-DELAY = 2  # seconds between requests
+MAX_WORKERS = 10  # Number of threads to check usernames concurrently
 available_usernames = []
 
 # --- Telegram notification function ---
@@ -72,33 +72,42 @@ def load_usernames():
     with open(usernames_file, 'r') as f:
         return [line.strip() for line in f if line.strip()]
 
-# --- Save available username to file ---
-def save_available(username):
-    with open(available_file, 'a') as f:
-        f.write(username + "\n")
+# --- Worker task for ThreadPool ---
+def username_check_task(username):
+    if check_username(username):
+        print(f"[+] Available: {username}")
+        send_telegram(f"✅ Available username found: {username}")
+        return username
+    else:
+        print(f"[-] Taken: {username}")
+        return None
 
-# --- Background checker thread ---
+# --- Background checker thread with concurrency ---
 def username_checker_loop():
     global available_usernames
 
-    # Notify on Telegram if deploy hook URL exists (just once)
-    if RENDER_DEPLOY_HOOK_URL:
-        send_telegram(f"🔔 Deploy Hook URL detected: {RENDER_DEPLOY_HOOK_URL}")
-    else:
-        print("[!] No Deploy Hook URL set, skipping deploy notification.")
-
-    usernames = load_usernames()
+    send_telegram("🚀 Username checker started!")
     available_usernames = []
 
-    for username in usernames:
-        if check_username(username):
-            print(f"[+] Available: {username}")
-            available_usernames.append(username)
-            save_available(username)
-            send_telegram(f"✅ Available username found: {username}")  # Telegram alert
-        else:
-            print(f"[-] Taken: {username}")
-        time.sleep(DELAY)
+    usernames = load_usernames()
+    if not usernames:
+        send_telegram("⚠️ No usernames found to check.")
+        return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(username_check_task, username): username for username in usernames}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                available_usernames.append(result)
+
+    if available_usernames:
+        report = "📋 Username check completed.\nAvailable usernames:\n" + "\n".join(available_usernames)
+    else:
+        report = "📋 Username check completed.\nNo available usernames found."
+
+    send_telegram(report)
+    send_telegram("🛑 Username checker stopped.")
 
 # --- Start checking in background ---
 def start_check_thread():
@@ -136,7 +145,6 @@ def run_telegram_bot():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("redeploy", redeploy))
 
-    # Run the bot asynchronously in a separate thread
     threading.Thread(target=application.run_polling, daemon=True).start()
 
 # --- Flask Routes ---
